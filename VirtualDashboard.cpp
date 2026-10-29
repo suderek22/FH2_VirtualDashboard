@@ -26,15 +26,17 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace {
 
-constexpr char kVersion[] = "1.2.0";
+constexpr char kVersion[] = "1.3.6";
 constexpr char kNitroKey[] = "NitroGauge";
 constexpr char kTurboKey[] = "TurboGauge";
+constexpr char kLayoutKey[] = "DashboardLayout";
 constexpr char kSettingKey[] = "DashEnabled";
 
 // Inside the HUD speedometer update: rax = car-state object, rdi = HUD
 // element, [rdi+0xE8] = the car it shows. Runs on the game thread.
 constexpr std::uintptr_t kHudHookRva = 0x783E67;
 constexpr std::uintptr_t kHudCarOffset = 0xE8;
+constexpr std::uintptr_t kSignalOffset = 0x51BB; // car -> 3 bytes: hazards, left, right signal on
 constexpr std::uintptr_t kNameOffset = 0x350;    // car -> media name string
 constexpr std::uintptr_t kLightsOffset = 0x51A2; // car -> headlights on (byte)
 
@@ -78,6 +80,7 @@ std::atomic<bool> g_enabled{true};
 std::atomic<int> g_port{8080};
 std::atomic<bool> g_show_nitro{true};
 std::atomic<bool> g_show_turbo{true};
+std::atomic<int> g_layout{0};
 
 std::mutex g_json_mutex;
 std::string g_json = "{\"valid\":false}";
@@ -140,6 +143,11 @@ bool read_sample(const void* car, const void* state, Telemetry* t) {
         for (int i = 0; i < 3; ++i)
             t->pos[i] = *reinterpret_cast<const float*>(s + kPos + 4 * i);
         t->lights = c[kLightsOffset] ? 1 : 0;
+        {
+            const bool haz = c[kSignalOffset] != 0, left = c[kSignalOffset + 1] != 0,
+                       right = c[kSignalOffset + 2] != 0;
+            t->ind = (haz || (left && right)) ? 3 : left ? 1 : right ? 2 : 0;
+        }
         read_name(c, t->car);
         t->valid = true;
         return true;
@@ -181,14 +189,14 @@ void publish(const Telemetry& t) {
             "\"redline\":%.1f,\"limiter\":%.1f,\"gear\":%d,\"throttle\":%.3f,\"brake\":%.3f,"
             "\"clutch\":%.3f,\"handbrake\":%.3f,\"torque\":%.1f,\"boost\":%.2f,\"power\":%.1f,"
             "\"steer\":%.3f,\"lights\":%d,\"ind\":%d,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f,"
-            "\"nitro\":%d,\"shownitro\":%d,\"showturbo\":%d,"
+            "\"nitro\":%d,\"shownitro\":%d,\"showturbo\":%d,\"layout\":%d,"
             "\"time\":%.0f,\"w0\":%.3f,\"w1\":%.3f,\"w2\":%.3f,\"dbg\":{",
             t.car, clean(t.speed), omega * 9.5492966f, clean(t.redline) * 9.5492966f,
             clean(t.limiter) * 9.5492966f, t.gear, clean(t.throttle), clean(t.brake),
             clean(t.clutch), clean(t.handbrake), clean(t.torque), clean(t.boost),
             clean(t.torque) * omega / 1000.0f, clean(t.steer), t.lights, t.ind, clean(t.pos[0]),
             clean(t.pos[1]), clean(t.pos[2]), t.nitro, g_show_nitro.load() ? 1 : 0,
-            g_show_turbo.load() ? 1 : 0, clean(t.time), clean(t.weather[0]),
+            g_show_turbo.load() ? 1 : 0, g_layout.load(), clean(t.time), clean(t.weather[0]),
             clean(t.weather[1]), clean(t.weather[2]));
         for (std::size_t i = 0; i < sizeof(kDbgOffsets) / sizeof(kDbgOffsets[0]) && n > 0 &&
                                 n < static_cast<int>(sizeof(buf)) - 40; ++i)
@@ -204,8 +212,6 @@ std::atomic<std::uint64_t> g_last_sample{0};
 std::atomic<bool> g_logged_car{false};
 char g_logged_name[64] = {};
 std::atomic<const void*> g_car{nullptr};
-std::atomic<int> g_ind{0};
-std::atomic<float> g_steer{0.0f};
 char g_car_name[64] = {};
 
 // Game clock and weather, read from memory only (same chain the WeatherMenu tool uses).
@@ -230,6 +236,43 @@ void fill_world(Telemetry& t) {
     }
 }
 
+// The game consumes the signal bytes during the car update, so they are only set for a
+// moment each frame. A fast poller latches them: a signal counts as on while it was seen
+// within the last kSignalHoldMs.
+std::atomic<std::uint64_t> g_sig_seen[3] = {};
+constexpr std::uint64_t kSignalHoldMs = 250;
+
+void signal_poller() {
+    for (;;) {
+        const auto* car = static_cast<const std::uint8_t*>(g_car.load());
+        if (car) {
+            __try {
+                const std::uint64_t now = GetTickCount64();
+                for (int i = 0; i < 3; ++i)
+                    if (car[kSignalOffset + i]) g_sig_seen[i].store(now);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+        Sleep(0);
+        static int n = 0;
+        if (++n % 64 == 0) Sleep(1);
+    }
+}
+
+int latched_signals() {
+    const std::uint64_t now = GetTickCount64();
+    const bool haz = now - g_sig_seen[0].load() < kSignalHoldMs,
+               l = now - g_sig_seen[1].load() < kSignalHoldMs,
+               r = now - g_sig_seen[2].load() < kSignalHoldMs;
+    return (haz || (l && r)) ? 3 : l ? 1 : r ? 2 : 0;
+}
+void log_indicators(int ind) {
+    static int last = 0;
+    if (ind == last) return;
+    last = ind;
+    logf("Indicators now %d (1=left 2=right 3=hazard).", ind);
+}
+
 void hud_hook(FH2Context* ctx, void*) {
     if (!g_enabled.load()) return;
     const std::uint64_t now = GetTickCount64();
@@ -245,10 +288,10 @@ void hud_hook(FH2Context* ctx, void*) {
     Telemetry t;
     if (!read_sample(car, reinterpret_cast<const void*>(ctx->rax), &t)) return;
     g_last_sample.store(now);
+    t.ind = latched_signals();
+    log_indicators(t.ind);
     std::memcpy(g_car_name, t.car, sizeof(g_car_name));
     g_car.store(car);
-    g_steer.store(clean(t.steer));
-    t.ind = g_ind.load();
     fill_world(t);
     t.nitro = read_nitro();
     publish(t);
@@ -259,62 +302,12 @@ void hud_hook(FH2Context* ctx, void*) {
     }
 }
 
-// Turn signals are emulated from the D-pad (same gestures as Extra Options):
-// hold left/right 1 s to toggle, tap up for hazards, steering cancels.
-// XInput is polled here, never on the game thread.
-struct XPad {
-    WORD buttons;
-    BYTE lt, rt;
-    SHORT lx, ly, rx, ry;
-};
-using XGetState = DWORD(WINAPI*)(DWORD, void*);
-
-void update_indicators(std::uint64_t now, WORD btn, float steer) {
-    static std::uint64_t down[3] = {};
-    static bool fired[3] = {};
-    static bool turned = false;
-    const WORD masks[3] = {0x4, 0x8, 0x1};
-    int ind = g_ind.load();
-    for (int i = 0; i < 3; ++i) {
-        const bool pressed = (btn & masks[i]) != 0;
-        if (pressed && !down[i]) { down[i] = now; fired[i] = false; }
-        if (pressed && i < 2 && !fired[i] && now - down[i] >= 1000) {
-            fired[i] = true;
-            ind = ind == i + 1 ? 0 : i + 1;
-            turned = false;
-        }
-        if (!pressed && down[i]) {
-            if (i == 2 && now - down[i] < 500) { ind = ind == 3 ? 0 : 3; turned = false; }
-            down[i] = 0;
-        }
-    }
-    if (ind == 1 || ind == 2) {
-        const float s = ind == 1 ? -steer : steer;
-        if (s > 0.35f) turned = true;
-        else if (turned && s < 0.1f) { ind = 0; turned = false; }
-    }
-    if (ind != g_ind.load()) {
-        g_ind.store(ind);
-        logf("Indicators now %d (1=left 2=right 3=hazard).", ind);
-    }
-}
-
 // Keeps the dashboard alive in menus (the HUD hook doesn't fire there) by
 // re-reading the last known car from memory only. Never calls game code.
 void watchdog() {
-    XGetState get_state = nullptr;
-    if (HMODULE x = LoadLibraryA("xinput1_4.dll"))
-        get_state = reinterpret_cast<XGetState>(GetProcAddress(x, "XInputGetState"));
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const std::uint64_t now = GetTickCount64();
-        WORD btn = 0;
-        if (get_state) {
-            XPad pad = {};
-            struct { DWORD packet; XPad gp; } st = {};
-            if (get_state(0, &st) == 0) { pad = st.gp; btn = pad.buttons; }
-        }
-        update_indicators(now, btn, g_steer.load());
         if (now - g_last_sample.load() <= 100) continue;
         const void* car = g_car.load();
         Telemetry t;
@@ -333,7 +326,6 @@ void watchdog() {
             t.valid = true;
             fill_world(t);
             t.nitro = read_nitro();
-            t.ind = g_ind.load();
             publish(t);
         } else {
             g_car.store(nullptr);
@@ -343,7 +335,9 @@ void watchdog() {
 }
 
 void install_hook() {
-    void* base = g_api->wait_for_code(30000);
+    // A slow launch can take over a minute, so wait up to 120 s.
+    void* base = nullptr;
+    base = g_api->wait_for_code(120000);
     if (!base) {
         logf("Timed out waiting for game code.");
         return;
@@ -360,6 +354,7 @@ void install_hook() {
         return;
     }
     logf("Telemetry hook active.");
+    std::thread(signal_poller).detach();
 }
 
 void send_all(SOCKET s, const char* data, int len) {
@@ -472,6 +467,14 @@ void on_gauge_changed(void*, const char* key, int value) {
                                value ? L"1" : L"0", g_ini_path.c_str());
 }
 
+void on_layout_changed(void*, const char* key, int value) {
+    if (!key || std::strcmp(key, kLayoutKey) != 0) return;
+    if (value < 0 || value > 2) value = 0;
+    g_layout.store(value);
+    WritePrivateProfileStringW(L"VirtualDashboard", L"Layout", std::to_wstring(value).c_str(),
+                               g_ini_path.c_str());
+}
+
 }  // namespace
 
 FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
@@ -482,7 +485,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     info.size = sizeof(info);
     info.name = "VirtualDashboard";
     info.version = kVersion;
-    info.platform_version = "2.7.1";
+    info.platform_version = "2.8.0";
     info.github_repo = "suderek22/FH2_VirtualDashboard";
     info.check_updates = 1;
     info.description = "Live telemetry dashboard for your phone over Wi-Fi.";
@@ -555,6 +558,31 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         turbo.value = show_turbo ? 1 : 0;
         turbo.on_change = on_gauge_changed;
         if (!api->add_setting(g_mod, &turbo)) logf("Could not add the turbo option.");
+    }
+
+    int layout = static_cast<int>(
+        GetPrivateProfileIntW(L"VirtualDashboard", L"Layout", 0, g_ini_path.c_str()));
+    if (layout < 0 || layout > 2) layout = 0;
+    g_layout.store(layout);
+    WritePrivateProfileStringW(L"VirtualDashboard", L"Layout", std::to_wstring(layout).c_str(),
+                               g_ini_path.c_str());
+    if (api->api_version >= 9 && api->add_setting) {
+        static const char* const names[] = {"Default", "Alternative", "Revuelto"};
+        FH2Setting sel{};
+        sel.size = sizeof(sel);
+        sel.key = kLayoutKey;
+        sel.label = "Dashboard layout";
+        sel.description =
+            "Default: two dials. Alternative: red needles, nitro and boost as strips. "
+            "Revuelto: one central rev counter.";
+        sel.kind = FH2_SETTING_CHOICE;
+        sel.value = layout;
+        sel.choices = names;
+        sel.choice_count = 3;
+        sel.on_change = on_layout_changed;
+        if (!api->add_setting(g_mod, &sel)) logf("Could not add the layout selector.");
+    } else {
+        logf("Platform older than 2.8.0: layout selector unavailable (Layout in the ini still works).");
     }
 
     std::thread(install_hook).detach();
