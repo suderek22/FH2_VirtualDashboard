@@ -26,7 +26,9 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace {
 
-constexpr char kVersion[] = "1.1.0";
+constexpr char kVersion[] = "1.2.0";
+constexpr char kNitroKey[] = "NitroGauge";
+constexpr char kTurboKey[] = "TurboGauge";
 constexpr char kSettingKey[] = "DashEnabled";
 
 // Inside the HUD speedometer update: rax = car-state object, rdi = HUD
@@ -63,6 +65,7 @@ struct Telemetry {
     int lights = 0;
     int ind = 0;
     float clutch = 0, handbrake = 0, torque = 0;
+    int nitro = -1;
     float boost = 0, time = -1, weather[3] = {};
     float dbg[sizeof(kDbgOffsets) / sizeof(kDbgOffsets[0])] = {};
 };
@@ -73,6 +76,8 @@ std::uint8_t* g_exe = nullptr;
 std::filesystem::path g_ini_path;
 std::atomic<bool> g_enabled{true};
 std::atomic<int> g_port{8080};
+std::atomic<bool> g_show_nitro{true};
+std::atomic<bool> g_show_turbo{true};
 
 std::mutex g_json_mutex;
 std::string g_json = "{\"valid\":false}";
@@ -143,19 +148,25 @@ bool read_sample(const void* car, const void* state, Telemetry* t) {
     }
 }
 
-float clean(float v) {
-    return (v == v && v > -1e9f && v < 1e9f) ? v : 0.0f;
-}
-
-// Nitro level (0-100) from FnFNitro.dll if it is loaded, else -1. Looked up lazily: the mods load in any order.
+// FnFNitro exports FnFNitro_GetNitroPercent(): tank 0-100. -1 = not installed.
 int read_nitro() {
-    using NitroFn = int (*)();
-    static NitroFn fn = nullptr;
+    using Fn = int (*)();
+    static Fn fn = nullptr;
     if (!fn) {
         if (HMODULE m = GetModuleHandleW(L"FnFNitro.dll"))
-            fn = reinterpret_cast<NitroFn>(GetProcAddress(m, "FnFNitro_GetNitroPercent"));
+            fn = reinterpret_cast<Fn>(GetProcAddress(m, "FnFNitro_GetNitroPercent"));
     }
-    return fn ? fn() : -1;
+    if (!fn) return -1;
+    __try {
+        const int v = fn();
+        return v < 0 ? 0 : (v > 100 ? 100 : v);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+float clean(float v) {
+    return (v == v && v > -1e9f && v < 1e9f) ? v : 0.0f;
 }
 
 void publish(const Telemetry& t) {
@@ -170,13 +181,15 @@ void publish(const Telemetry& t) {
             "\"redline\":%.1f,\"limiter\":%.1f,\"gear\":%d,\"throttle\":%.3f,\"brake\":%.3f,"
             "\"clutch\":%.3f,\"handbrake\":%.3f,\"torque\":%.1f,\"boost\":%.2f,\"power\":%.1f,"
             "\"steer\":%.3f,\"lights\":%d,\"ind\":%d,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f,"
-            "\"time\":%.0f,\"w0\":%.3f,\"w1\":%.3f,\"w2\":%.3f,\"nitro\":%d,\"dbg\":{",
+            "\"nitro\":%d,\"shownitro\":%d,\"showturbo\":%d,"
+            "\"time\":%.0f,\"w0\":%.3f,\"w1\":%.3f,\"w2\":%.3f,\"dbg\":{",
             t.car, clean(t.speed), omega * 9.5492966f, clean(t.redline) * 9.5492966f,
             clean(t.limiter) * 9.5492966f, t.gear, clean(t.throttle), clean(t.brake),
             clean(t.clutch), clean(t.handbrake), clean(t.torque), clean(t.boost),
             clean(t.torque) * omega / 1000.0f, clean(t.steer), t.lights, t.ind, clean(t.pos[0]),
-            clean(t.pos[1]), clean(t.pos[2]), clean(t.time), clean(t.weather[0]),
-            clean(t.weather[1]), clean(t.weather[2]), read_nitro());
+            clean(t.pos[1]), clean(t.pos[2]), t.nitro, g_show_nitro.load() ? 1 : 0,
+            g_show_turbo.load() ? 1 : 0, clean(t.time), clean(t.weather[0]),
+            clean(t.weather[1]), clean(t.weather[2]));
         for (std::size_t i = 0; i < sizeof(kDbgOffsets) / sizeof(kDbgOffsets[0]) && n > 0 &&
                                 n < static_cast<int>(sizeof(buf)) - 40; ++i)
             n += std::snprintf(buf + n, sizeof(buf) - n, "%s\"%zX\":%.3f", i ? "," : "",
@@ -237,6 +250,7 @@ void hud_hook(FH2Context* ctx, void*) {
     g_steer.store(clean(t.steer));
     t.ind = g_ind.load();
     fill_world(t);
+    t.nitro = read_nitro();
     publish(t);
     if (std::strcmp(g_logged_name, t.car) != 0) {
         std::memcpy(g_logged_name, t.car, sizeof(g_logged_name));
@@ -318,6 +332,7 @@ void watchdog() {
         if (ok) {
             t.valid = true;
             fill_world(t);
+            t.nitro = read_nitro();
             t.ind = g_ind.load();
             publish(t);
         } else {
@@ -448,6 +463,15 @@ void on_enabled_changed(void*, const char* key, int value) {
                                value ? L"1" : L"0", g_ini_path.c_str());
 }
 
+void on_gauge_changed(void*, const char* key, int value) {
+    if (!key) return;
+    const bool nitro = std::strcmp(key, kNitroKey) == 0;
+    if (!nitro && std::strcmp(key, kTurboKey) != 0) return;
+    (nitro ? g_show_nitro : g_show_turbo).store(value != 0);
+    WritePrivateProfileStringW(L"VirtualDashboard", nitro ? L"NitroGauge" : L"TurboGauge",
+                               value ? L"1" : L"0", g_ini_path.c_str());
+}
+
 }  // namespace
 
 FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
@@ -459,7 +483,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     info.name = "VirtualDashboard";
     info.version = kVersion;
     info.platform_version = "2.7.1";
-    info.check_updates = 0;
+    info.github_repo = "suderek22/FH2_VirtualDashboard";
+    info.check_updates = 1;
     info.description = "Live telemetry dashboard for your phone over Wi-Fi.";
     g_api = api;
     g_mod = api->register_mod(&info);
@@ -498,6 +523,38 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         if (!api->add_setting(g_mod, &setting)) {
             logf("Could not add the option to the Mods menu.");
         }
+    }
+
+    const bool show_nitro =
+        GetPrivateProfileIntW(L"VirtualDashboard", L"NitroGauge", 1, g_ini_path.c_str()) != 0;
+    const bool show_turbo =
+        GetPrivateProfileIntW(L"VirtualDashboard", L"TurboGauge", 1, g_ini_path.c_str()) != 0;
+    g_show_nitro.store(show_nitro);
+    g_show_turbo.store(show_turbo);
+    WritePrivateProfileStringW(L"VirtualDashboard", L"NitroGauge", show_nitro ? L"1" : L"0",
+                               g_ini_path.c_str());
+    WritePrivateProfileStringW(L"VirtualDashboard", L"TurboGauge", show_turbo ? L"1" : L"0",
+                               g_ini_path.c_str());
+    if (api->api_version >= 4 && api->add_setting) {
+        FH2Setting nitro{};
+        nitro.size = sizeof(nitro);
+        nitro.key = kNitroKey;
+        nitro.label = "Dashboard nitro gauge";
+        nitro.description =
+            "Show the FnFNitro tank next to the speedometer. Needs FnFNitro 1.4.0; "
+            "the value is always sent in the telemetry.";
+        nitro.value = show_nitro ? 1 : 0;
+        nitro.on_change = on_gauge_changed;
+        if (!api->add_setting(g_mod, &nitro)) logf("Could not add the nitro option.");
+        FH2Setting turbo{};
+        turbo.size = sizeof(turbo);
+        turbo.key = kTurboKey;
+        turbo.label = "Dashboard turbo gauge";
+        turbo.description =
+            "Show a small boost gauge on the rev counter for cars that have a turbo.";
+        turbo.value = show_turbo ? 1 : 0;
+        turbo.on_change = on_gauge_changed;
+        if (!api->add_setting(g_mod, &turbo)) logf("Could not add the turbo option.");
     }
 
     std::thread(install_hook).detach();

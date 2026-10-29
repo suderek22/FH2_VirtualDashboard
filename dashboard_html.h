@@ -14,7 +14,6 @@ canvas{width:min(46vw,380px);height:min(46vw,380px)}
 #gearlbl{opacity:.6;letter-spacing:.2em;font-size:12px}#gear.sp{font-size:min(18vw,90px)}
 #car{text-align:center;font-size:min(7vw,34px);font-weight:600;margin:6px 0 14px}
 table{width:100%;border-collapse:collapse;font-size:15px}
-#nos{display:none;margin:0 8px 12px;text-align:center;color:#35b8ff;font-size:12px;letter-spacing:.2em}#nosbar{height:10px;background:#1d2433;border-radius:5px;margin-top:4px;overflow:hidden}#nosfill{height:100%;width:0;background:#35b8ff}
 td{padding:6px 8px;border-top:1px solid #1d2433}
 td:last-child{text-align:right;font-variant-numeric:tabular-nums;color:#8fd3ff}
 #foot{justify-content:space-between;align-items:center;margin:14px 8px 20px;color:#ff5fa8;font-size:14px}#foot a{color:#ff5fa8}#lt{text-align:center;color:#3a4252;margin-top:6px}#ind{display:flex;justify-content:center;gap:16px;color:#3a4252;margin-bottom:4px}#ind svg.on{color:#7fd13b}#rawbtn{text-align:center}#tog{background:none;border:0;color:#8a96a8;padding:4px 14px}#tog svg{transition:transform .2s}#tog.open svg{transform:rotate(180deg)}#lt.on{color:#7fd13b}#status{text-align:center;font-size:12px;opacity:.6;margin-top:10px}
@@ -24,17 +23,51 @@ td:last-child{text-align:right;font-variant-numeric:tabular-nums;color:#8fd3ff}
 <div id="gearbox"><div id="ind"><svg id="indL" viewBox="0 0 100 100" width="34" height="34"><path d="M5 50L48 8V32H95V68H48V92Z" fill="currentColor"/></svg><svg id="indR" viewBox="0 0 100 100" width="34" height="34"><path d="M95 50L52 8V32H5V68H52V92Z" fill="currentColor"/></svg></div><div id="gear">-</div><div id="gearlbl">GEAR</div><div id="lt"><svg id="lights" viewBox="0 0 768 768" width="40" height="40"><g fill="none" stroke="currentColor" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"><path d="M410 176C480 170 560 190 640 235C735 290 745 400 640 455C560 500 480 520 410 514C370 430 370 260 410 176Z"/><path d="M300 186L35 284M300 264L35 362M300 341L35 439M300 418L35 516M300 496L35 593"/></g></svg></div></div>
 <canvas id="rpm" width="600" height="600"></canvas></div>
 <div id="car">Waiting for the game...</div>
-<div id="nos">NOS <span id="nosv"></span><div id="nosbar"><div id="nosfill"></div></div></div>
 
 <div id="rawbtn"><button id="tog" aria-label="Show raw values"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
 <table id="raw" style="display:none"></table>
-<div id="foot" style="display:none"><span>Created by suderek</span><span>v1.1.0</span><a href="https://fh2mods.com/" target="_blank" rel="noopener">Visit FH2mods</a></div>
+<div id="foot" style="display:none"><span>Created by suderek</span><span>v1.2.0</span><a href="https://fh2mods.com/" target="_blank" rel="noopener">Visit FH2mods</a></div>
 <div id="status"></div></div>
 <script>
 )HTML") +
     std::string(R"HTML(
 var d=null,mph=false,spdMax=300,ok=false,lastCar='',lastLim=0,testStart=0;
-var testDown=false;
+var testDown=false,turboSeen=false,nitroPrev=-1,pulseStart=0;
+function nitroOn(){return ok&&d&&d.valid&&d.shownitro&&d.nitro>=0;}
+function turboOn(){return ok&&d&&d.valid&&d.showturbo&&turboSeen;}
+function nitroArc(c,W){
+ var cx=W/2,cy=W/2,r=W*0.45,lw=W*0.035,hs=0.62,gap=0.05,n=4,seg=(2*hs-gap*(n-1))/n,pct=d.nitro;
+ c.lineCap='butt';c.lineWidth=lw;
+ for(var i=0;i<n;i++){
+  var s=Math.PI-hs+i*(seg+gap),f=Math.max(0,Math.min(1,(pct-25*i)/25));
+  c.strokeStyle='#3a1033';c.beginPath();c.arc(cx,cy,r,s,s+seg);c.stroke();
+  if(f>0){c.strokeStyle='#c0129a';c.beginPath();c.arc(cx,cy,r,s,s+seg*f);c.stroke();}
+ }
+ if(pct<=0){
+  var a=1;
+  if(pulseStart){var el=(Date.now()-pulseStart)/1000;if(el<2)a=0.3+0.7*(0.5+0.5*Math.sin(el*Math.PI*4));}
+  c.globalAlpha=a;c.strokeStyle='#ff2d3d';c.lineWidth=W*0.008;c.lineJoin='miter';
+  for(var j=0;j<n;j++){
+   var s2=Math.PI-hs+j*(seg+gap),e2=s2+seg;
+   c.beginPath();c.arc(cx,cy,r+lw/2,s2,e2);c.arc(cx,cy,r-lw/2,e2,s2,true);c.closePath();c.stroke();
+  }
+  c.globalAlpha=1;
+ }
+}
+function turboGauge(c,W){
+ var cx=W*0.885,cy=W*0.115,r=W*0.075,a0=Math.PI*0.75,sw=Math.PI*1.5;
+ var bar=(d.boost-14.696)/14.5038,f=Math.max(0,Math.min(1,(bar+1)/4));
+ c.lineCap='butt';c.lineWidth=W*0.016;
+ c.strokeStyle='#1d2433';c.beginPath();c.arc(cx,cy,r,a0,a0+sw);c.stroke();
+ c.strokeStyle='#ffb020';c.beginPath();c.arc(cx,cy,r,a0,a0+sw*f);c.stroke();
+ c.fillStyle='#cfd8e6';c.font=(W*0.026)+'px sans-serif';c.textAlign='center';c.textBaseline='middle';
+ for(var v=-1;v<=3;v++){var a=a0+sw*(v+1)/4;c.fillText(v,cx+Math.cos(a)*(r-W*0.04),cy+Math.sin(a)*(r-W*0.04));}
+ var an=a0+sw*f;c.strokeStyle='#fff';c.lineWidth=W*0.007;c.beginPath();
+ c.moveTo(cx,cy);c.lineTo(cx+Math.cos(an)*(r-W*0.06),cy+Math.sin(an)*(r-W*0.06));c.stroke();
+ c.fillStyle='#fff';c.beginPath();c.arc(cx,cy,W*0.012,0,7);c.fill();
+ c.font='bold '+(W*0.03)+'px sans-serif';c.fillText(bar.toFixed(1),cx,cy+r*0.8);
+ c.font=(W*0.02)+'px sans-serif';c.fillStyle='#8a96a8';c.fillText('BAR',cx,cy+r*0.8+W*0.03);
+}
 function testLevel(){
  if(!testStart)return -1;
  var e=(Date.now()-testStart)/1000,T=0.9;testDown=e>=T;
@@ -49,6 +82,8 @@ function dial(cv,val,max,step,label,unit,red,fmt){
  var tl=testLevel();if(tl>=0)val=testDown?val+(max-val)*tl:max*tl;
  var c=cv.getContext('2d'),W=cv.width,cx=W/2,cy=W/2,r=W*0.42;
  c.clearRect(0,0,W,W);
+ var sc=((cv.id==='spd'&&nitroOn())||(cv.id==='rpm'&&turboOn()))?0.88:1;
+ c.save();c.translate(cx,cy);c.scale(sc,sc);c.translate(-cx,-cy);
  var a0=Math.PI*0.75,sw=Math.PI*1.5;
  c.lineWidth=W*0.04;c.lineCap='butt';
  c.strokeStyle='#1d2433';c.beginPath();c.arc(cx,cy,r,a0,a0+sw);c.stroke();
@@ -66,6 +101,9 @@ function dial(cv,val,max,step,label,unit,red,fmt){
  c.fillStyle='#fff';c.beginPath();c.arc(cx,cy,W*0.03,0,7);c.fill();
  c.font='bold '+(W*0.13)+'px sans-serif';c.fillText((cv.id==='spd'&&gearSpd)?gearTxt:(cv.id==='rpm'&&rpmQ)?Math.round(val/50)*50:Math.round(val),cx,cy+W*0.2);
  c.font=(W*0.05)+'px sans-serif';c.fillStyle='#8a96a8';c.fillText(unit,cx,cy+W*0.3);
+ c.restore();
+ if(cv.id==='spd'&&nitroOn())nitroArc(c,W);
+ if(cv.id==='rpm'&&turboOn())turboGauge(c,W);
 }
 function pretty(n){
  if(!n)return '';
@@ -106,8 +144,8 @@ function rows(v){
  r('Handbrake (0-1)',v.handbrake.toFixed(3));
  r('Engine torque (Nm)',v.torque.toFixed(1));
  r('Engine power (kW)',v.power.toFixed(1));
+ if(v.nitro>=0)r('Nitro tank (%)',v.nitro);
  r('Turbo boost (bar)',((v.boost-14.696)/14.5038).toFixed(2));
- if(v.nitro>=0)r('Nitro (%)',v.nitro);
  if(v.time>=0){var tm=Math.floor(v.time/60);r('Game time',('0'+Math.floor(tm/60)).slice(-2)+':'+('0'+tm%60).slice(-2));}
  r('Weather: atmosphere / rain / environment',v.w0.toFixed(3)+' / '+v.w1.toFixed(3)+' / '+v.w2.toFixed(3));
  r('Indicators (1=L 2=R 3=hazard)',v.ind);
@@ -118,16 +156,21 @@ function rows(v){
  r('World position Z',v.z.toFixed(2));
  t.innerHTML=h;
 }
-function nos(j){var n=j.valid&&j.nitro>=0;document.getElementById('nos').style.display=n?'block':'none';if(n){document.getElementById('nosv').textContent=j.nitro+'%';document.getElementById('nosfill').style.width=j.nitro+'%';}}
 function poll(){
  fetch('/api',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){
-  d=j;ok=true;nos(j);
-  if(j.valid&&(j.car!==lastCar||j.limiter!==lastLim)){lastCar=j.car;lastLim=j.limiter;spdMax=300;testStart=Date.now();}
+  d=j;ok=true;
+  if(j.valid&&(j.car!==lastCar||j.limiter!==lastLim)){lastCar=j.car;lastLim=j.limiter;spdMax=300;testStart=Date.now();turboSeen=false;}
+  if(j.valid&&Math.abs(j.boost)>0.01)turboSeen=true;
+  if(j.valid&&j.nitro>=0){
+   if(j.nitro<=0&&nitroPrev>0)pulseStart=Date.now();
+   else if(j.nitro>0)pulseStart=0;
+   nitroPrev=j.nitro;
+  }else nitroPrev=-1;
   document.getElementById('car').textContent=j.valid?pretty(j.car):'Waiting for a car in the game...';
   document.getElementById('status').textContent='Connected';
   document.getElementById('lt').className=(j.valid&&j.lights)?'on':'';var ib=j.valid?(j.ind|0):0;document.getElementById('indL').setAttribute('class',((ib&1)&&(Date.now()%600<300))?'on':'');document.getElementById('indR').setAttribute('class',((ib&2)&&(Date.now()%600<300))?'on':'');rows(j);draw();setTimeout(poll,60);
  }).catch(function(){
-  ok=false;d=null;nos({});document.getElementById('status').textContent='Connection lost, retrying...';
+  ok=false;d=null;document.getElementById('status').textContent='Connection lost, retrying...';
   document.getElementById('car').textContent='Waiting for a car in the game...';
   document.getElementById('lt').className='';document.getElementById('indL').setAttribute('class','');document.getElementById('indR').setAttribute('class','');rows(null);
   draw();setTimeout(poll,1000);
