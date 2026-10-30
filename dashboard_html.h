@@ -27,7 +27,7 @@ td:last-child{text-align:right;font-variant-numeric:tabular-nums;color:#8fd3ff}
 
 <div id="rawbtn"><button id="tog" aria-label="Show raw values"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
 <table id="raw" style="display:none"></table>
-<div id="foot" style="display:none"><span>Created by suderek</span><span>v1.3.6</span><a href="https://fh2mods.com/" target="_blank" rel="noopener">Visit FH2mods</a></div>
+<div id="foot" style="display:none"><span>Created by suderek</span><span>v1.4.0</span><a href="https://fh2mods.com/" target="_blank" rel="noopener">Visit FH2mods</a></div>
 <div id="status"></div></div>
 <script>
 )HTML") +
@@ -167,14 +167,45 @@ function revuelto(v,sp){
  var ib=ok&&v.valid?(v.ind|0):0,on=blinkOn(),u=R*0.2;
  c.fillStyle=(ib&1)&&on?'#7fd13b':'#2a3140';c.save();c.translate(W*0.3,H*0.03);c.scale(u/100,u/100);c.fill(new Path2D('M5 50L48 8V32H95V68H48V92Z'));c.restore();
  c.fillStyle=(ib&2)&&on?'#7fd13b':'#2a3140';c.save();c.translate(W*0.7-u,H*0.03);c.scale(u/100,u/100);c.fill(new Path2D('M95 50L52 8V32H5V68H52V92Z'));c.restore();
- c.save();c.translate(W*0.84,H*0.5);c.scale(R*0.35/768,R*0.35/768);
- c.strokeStyle=(ok&&v.valid&&v.lights)?'#7fd13b':'#3a4252';c.lineWidth=38;c.lineCap='round';c.lineJoin='round';
- c.stroke(new Path2D('M410 176C480 170 560 190 640 235C735 290 745 400 640 455C560 500 480 520 410 514C370 430 370 260 410 176Z'));
- c.stroke(new Path2D('M300 186L35 284M300 264L35 362M300 341L35 439M300 418L35 516M300 496L35 593'));c.restore();
  if(ok&&v.valid&&v.time>=0){var tm=Math.floor(v.time/60);
   c.fillStyle='#cfd8e6';c.font='italic 600 '+(R*0.12)+'px '+FT;c.textAlign='right';c.textBaseline='top';
   c.fillText(('0'+Math.floor(tm/60)).slice(-2)+':'+('0'+tm%60).slice(-2),W*0.97,H*0.04);}
  if(turboOn())turboRev(c,W*0.12,cy,H*0.17);
+ shiftLight(c,W*0.12,H*0.15,H*0.045,v);
+ assistCluster(c,W*0.88,cy,H*0.17,v);
+}
+function shiftLight(c,cx,cy,r,v){
+ var live=ok&&v.valid&&v.redline>0,on=false;
+ if(live){var d=v.rpm-v.redline;on=d>=-100;}
+ c.fillStyle='#070a10';c.beginPath();c.arc(cx,cy,r*1.25,0,7);c.fill();
+ c.save();if(on){c.shadowColor='#ff3b30';c.shadowBlur=r*1.2;}
+ c.fillStyle=on?'#ff3b30':'#2a1216';c.beginPath();c.arc(cx,cy,r,0,7);c.fill();c.restore();
+}
+function assistIcon(c,cx,cy,s,txt,on){
+ var FT='"Segoe UI","Helvetica Neue",Arial,sans-serif',col=on?'#e8edf5':'#3a4252';
+ c.strokeStyle=col;c.fillStyle=col;c.lineWidth=s*0.12;c.beginPath();c.arc(cx,cy,s,0,7);c.stroke();
+ c.font='italic 800 '+(s*(txt.length>2?0.58:0.8))+'px '+FT;c.textAlign='center';c.textBaseline='middle';c.fillText(txt,cx,cy+s*0.04);
+}
+function handbrakeIcon(c,cx,cy,s,on){
+ c.save();c.translate(cx-s,cy-s);c.scale(s*2/768,s*2/768);
+ c.strokeStyle=on?'#ff3b30':'#3a4252';c.lineWidth=48;c.lineCap='round';c.lineJoin='round';
+ if(on){c.shadowColor='#ff3b30';c.shadowBlur=60;}
+ c.beginPath();c.arc(384,384,255,0,7);c.stroke();
+ c.stroke(new Path2D('M128 142C50 230 35 540 128 630M640 142C718 230 733 540 640 630M384 255V288M384 385V510'));
+ c.restore();
+}
+function assistCluster(c,cx,cy,r,v){
+ var live=ok&&v.valid,u=Math.max(2,r*0.2);
+ c.fillStyle='#070a10';c.beginPath();c.arc(cx,cy,r*1.2,0,7);c.fill();
+ c.lineWidth=r*0.1;c.strokeStyle='#222a38';c.beginPath();c.arc(cx,cy,r,0,7);c.stroke();
+ assistIcon(c,cx-r*0.68,cy,u,'ABS',live&&v.abs>0);
+ assistIcon(c,cx,cy-r*0.68,u,'TCS',live&&v.tcs>0);
+ assistIcon(c,cx+r*0.68,cy,u,'STM',live&&v.stm>0);
+ handbrakeIcon(c,cx,cy+r*0.68,u,live&&v.handbrake>0.5);
+ c.save();c.translate(cx-r*0.25,cy-r*0.25);c.scale(r*0.5/768,r*0.5/768);
+ c.strokeStyle=live&&v.lights?'#7fd13b':'#3a4252';c.lineWidth=38;c.lineCap='round';c.lineJoin='round';
+ c.stroke(new Path2D('M410 176C480 170 560 190 640 235C735 290 745 400 640 455C560 500 480 520 410 514C370 430 370 260 410 176Z'));
+ c.stroke(new Path2D('M300 186L35 284M300 264L35 362M300 341L35 439M300 418L35 516M300 496L35 593'));c.restore();
 }
 function testLevel(){
  if(!testStart)return -1;
@@ -272,6 +303,7 @@ function rows(v){
  r('Indicators (1=L 2=R 3=hazard)',v.ind);
  r('Steering (-1..1)',v.steer.toFixed(3));
  r('Headlights (0/1)',v.lights);
+ r('ABS / TCS / STM on (0/1)',v.abs+' / '+v.tcs+' / '+v.stm);
  r('World position X',v.x.toFixed(2));
  r('World position Y (height)',v.y.toFixed(2));
  r('World position Z',v.z.toFixed(2));

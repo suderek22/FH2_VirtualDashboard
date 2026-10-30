@@ -26,7 +26,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace {
 
-constexpr char kVersion[] = "1.3.6";
+constexpr char kVersion[] = "1.4.0";
 constexpr char kNitroKey[] = "NitroGauge";
 constexpr char kTurboKey[] = "TurboGauge";
 constexpr char kLayoutKey[] = "DashboardLayout";
@@ -57,6 +57,9 @@ constexpr std::uintptr_t kThrottle = 0xDB4;  // 0..1
 constexpr std::uintptr_t kSteer = 0xE00;     // -1..1
 constexpr std::uintptr_t kSpeed = 0xE28;     // m/s
 constexpr std::uintptr_t kPos = 0xEF0;       // x, y(height), z
+
+// Same virtual getters the HUD uses for its assist icons (IsABSOn / IsTCROn / IsSTMOn).
+constexpr std::uintptr_t kVtAbs = 0x708, kVtTcs = 0x710, kVtStm = 0x718;
 
 struct Telemetry {
     bool valid = false;
@@ -113,6 +116,22 @@ void read_name(const std::uint8_t* c, char* out) {
         out[n] = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         out[0] = 0;
+    }
+}
+
+std::atomic<int> g_abs{0}, g_tcs{0}, g_stm{0};
+
+// Game thread only (called from the HUD hook): the assist flags come from the
+// state object's virtual getters, exactly as the HUD reads them.
+void read_assists(const void* state) {
+    __try {
+        if (!state) return;
+        const auto* vt = *reinterpret_cast<void* const* const*>(state);
+        using Getter = std::uint8_t (*)(const void*);
+        g_abs.store(reinterpret_cast<Getter>(vt[kVtAbs / 8])(state) ? 1 : 0);
+        g_tcs.store(reinterpret_cast<Getter>(vt[kVtTcs / 8])(state) ? 1 : 0);
+        g_stm.store(reinterpret_cast<Getter>(vt[kVtStm / 8])(state) ? 1 : 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
@@ -178,7 +197,7 @@ float clean(float v) {
 }
 
 void publish(const Telemetry& t) {
-    char buf[1536];
+    char buf[2048];
     if (!t.valid) {
         std::snprintf(buf, sizeof(buf), "{\"valid\":false}");
     } else {
@@ -189,13 +208,13 @@ void publish(const Telemetry& t) {
             "\"redline\":%.1f,\"limiter\":%.1f,\"gear\":%d,\"throttle\":%.3f,\"brake\":%.3f,"
             "\"clutch\":%.3f,\"handbrake\":%.3f,\"torque\":%.1f,\"boost\":%.2f,\"power\":%.1f,"
             "\"steer\":%.3f,\"lights\":%d,\"ind\":%d,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f,"
-            "\"nitro\":%d,\"shownitro\":%d,\"showturbo\":%d,\"layout\":%d,"
+            "\"abs\":%d,\"tcs\":%d,\"stm\":%d,\"nitro\":%d,\"shownitro\":%d,\"showturbo\":%d,\"layout\":%d,"
             "\"time\":%.0f,\"w0\":%.3f,\"w1\":%.3f,\"w2\":%.3f,\"dbg\":{",
             t.car, clean(t.speed), omega * 9.5492966f, clean(t.redline) * 9.5492966f,
             clean(t.limiter) * 9.5492966f, t.gear, clean(t.throttle), clean(t.brake),
             clean(t.clutch), clean(t.handbrake), clean(t.torque), clean(t.boost),
             clean(t.torque) * omega / 1000.0f, clean(t.steer), t.lights, t.ind, clean(t.pos[0]),
-            clean(t.pos[1]), clean(t.pos[2]), t.nitro, g_show_nitro.load() ? 1 : 0,
+            clean(t.pos[1]), clean(t.pos[2]), g_abs.load(), g_tcs.load(), g_stm.load(), t.nitro, g_show_nitro.load() ? 1 : 0,
             g_show_turbo.load() ? 1 : 0, g_layout.load(), clean(t.time), clean(t.weather[0]),
             clean(t.weather[1]), clean(t.weather[2]));
         for (std::size_t i = 0; i < sizeof(kDbgOffsets) / sizeof(kDbgOffsets[0]) && n > 0 &&
@@ -288,6 +307,7 @@ void hud_hook(FH2Context* ctx, void*) {
     Telemetry t;
     if (!read_sample(car, reinterpret_cast<const void*>(ctx->rax), &t)) return;
     g_last_sample.store(now);
+    read_assists(reinterpret_cast<const void*>(ctx->rax));
     t.ind = latched_signals();
     log_indicators(t.ind);
     std::memcpy(g_car_name, t.car, sizeof(g_car_name));

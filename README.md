@@ -1,4 +1,4 @@
-# VirtualDashboard v1.3.6
+# VirtualDashboard v1.4.0
 
 A mod for Forza Horizon 2 (Azimuth 1.0.0.64) that serves a live dashboard on your local network. Open it on your phone or tablet to see speed, RPM, gear and more while you drive.
 
@@ -14,6 +14,7 @@ A mod for Forza Horizon 2 (Azimuth 1.0.0.64) that serves a live dashboard on you
 - Optional small turbo gauge (-1 to 3 bar) at the top right of the RPM gauge. It appears once a non-zero boost is read and stays until the next car change, game start or page refresh, so it never shows on cars without a turbo.
 - Three layouts, chosen in the game: **Default** (two dials), **Alternative** (red needles, nitro and boost as straight strips under the dials) and **Revuelto** (one central rev counter with a white filling line, tick marks, italic digits, gear, speed, indicators, headlights, clock and boost gauge; the nitro tank wraps the rev counter as a blue ring in four quarters).
 - Turn signals and hazards are read from the game itself.
+- ABS, TCS and STM state are read from the game (the same getters the HUD uses).
 - Works in portrait and landscape.
 
 ## Requirements
@@ -28,7 +29,7 @@ A mod for Forza Horizon 2 (Azimuth 1.0.0.64) that serves a live dashboard on you
 
 1. Close the game.
 2. Copy the `fh2-mods` folder from this package into the folder that contains your FH2 Mod Platform. Allow merging. This places `VirtualDashboard.dll` and `VirtualDashboard.ini` in your existing `fh2-mods` folder.
-3. Start the game. The log (`fh2-mods\platform.log`) should show `[VirtualDashboard] 1.3.6 registered`.
+3. Start the game. The log (`fh2-mods\platform.log`) should show `[VirtualDashboard] 1.4.0 registered`.
 4. Allow `azimuth` through Windows Firewall for **private** networks when prompted. If the prompt didn't appear, allow it manually in Windows Defender Firewall.
 5. Find your PC's IPv4 address (`ipconfig`) and open `http://<PC-IP>:8080/` on your phone, for example `http://192.168.178.85:8080/`.
 
@@ -52,7 +53,7 @@ A mod for Forza Horizon 2 (Azimuth 1.0.0.64) that serves a live dashboard on you
 - The dashboard keeps working in menus. It shows "Waiting for a car in the game..." during loading screens, after a car swap, or when the connection is lost.
 - Power and torque are approximations and may differ from the in-game Telemetry page. Boost is shown in bar.
 - Turn signals and hazards: the game has none of its own; Extra Options adds them (hold D-pad left/right 0.5 s, up for hazards). The dashboard reads the resulting state, see "How the turn signals are read" below. The blinking itself is animated on the page.
-- A JSON feed is available at `http://<PC-IP>:8080/api`. It now includes `nitro` (percent, -1 when FnFNitro is not loaded).
+- A JSON feed is available at `http://<PC-IP>:8080/api`. It now includes `nitro` (percent, -1 when FnFNitro is not loaded) and `abs`, `tcs`, `stm` (0/1).
 - The server has no password and is meant for a trusted home network. Don't expose the port to the internet.
 
 ## How the turn signals are read (for modders)
